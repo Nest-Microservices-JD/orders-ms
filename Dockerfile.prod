@@ -1,0 +1,60 @@
+# ===============================================
+# Dependencies
+# ===============================================
+
+FROM node:24-alpine3.23 AS deps
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+# ===============================================
+# Build
+# ===============================================
+
+FROM node:24-alpine3.23 AS build
+ARG ORDERS_DATABASE_URL
+ENV DATABASE_URL=$ORDERS_DATABASE_URL
+WORKDIR /usr/src/app
+
+# coping from deps stage
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+# coping from code application
+COPY . .
+RUN npx prisma migrate deploy
+RUN npx prisma generate
+# RUN npm run test
+RUN npm run build && npm ci -f --only=production && npm cache clean --force
+
+
+
+# ===============================================
+# Image
+# ===============================================
+
+FROM node:24-alpine3.23 AS prod
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+COPY --from=build /usr/src/app/dist ./dist
+
+COPY prisma ./prisma
+
+ENV NODE_ENV=production
+
+# Create entrypoint script for running migrations
+# Ensure proper permissions for node user
+RUN chown -R node:node /usr/src/app
+
+USER node
+
+EXPOSE 3000
+
+# Run migrations (best-effort) then start the app. Using a shell avoids creating an entrypoint file
+CMD ["node", "dist/src/main.js"]
